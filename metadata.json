@@ -1,0 +1,6 @@
+{
+  "name": "SG WeatherWatch - Real-Time Singapore Weather & PSI Monitor",
+  "description": "Live Singapore weather intelligence powered by official Data.gov.sg and NEA APIs with real-time rainfall monitoring, regional PSI alerts, 2-hour forecasts, and advisory thresholds.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
