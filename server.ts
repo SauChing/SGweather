@@ -84,9 +84,38 @@ async function startServer() {
     res.json({
       configured: Boolean(token),
       tokenType: token ? (token.startsWith('pk.') ? 'mapbox' : 'onemap') : 'none',
-      availableStyles: ['onemap-night', 'onemap-default', 'onemap-grey', 'carto-dark', 'osm'],
-      defaultStyle: token ? 'onemap-night' : 'carto-dark',
+      availableStyles: ['onemap-night', 'onemap-default', 'onemap-grey', 'onemap-original', 'carto-dark', 'osm'],
+      defaultStyle: 'onemap-night',
+      provider: 'https://www.onemap.gov.sg',
     });
+  });
+
+  // OneMap Location / Address search API proxy
+  app.get('/api/onemap/search', async (req: Request, res: Response) => {
+    const query = req.query.q as string;
+    if (!query) {
+      res.json({ results: [] });
+      return;
+    }
+    const token = process.env.MAP_ACCESS_TOKEN || process.env.VITE_MAP_ACCESS_TOKEN;
+    try {
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const searchRes = await fetch(
+        `https://www.onemap.gov.sg/api/common/elastic/search?searchVal=${encodeURIComponent(query)}&returnGeom=Y&getAddrDetails=Y`,
+        { headers }
+      );
+      if (searchRes.ok) {
+        const json = await searchRes.json();
+        res.json(json);
+        return;
+      }
+    } catch {
+      // fallback
+    }
+    res.json({ results: [] });
   });
 
   // Proxy OneMap Singapore / Mapbox tiles securely without leaking tokens to client

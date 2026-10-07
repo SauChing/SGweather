@@ -27,10 +27,11 @@ export const WeatherMap: React.FC<Props> = ({
   const tileLayerRef = useRef<L.TileLayer | null>(null);
 
   const [activeLayer, setActiveLayer] = useState<'rainfall' | 'psi' | 'forecast' | 'temperature'>('rainfall');
-  const [mapStyle, setMapStyle] = useState<'carto-dark' | 'onemap-night' | 'onemap-default' | 'onemap-grey' | 'osm'>('carto-dark');
+  const [mapStyle, setMapStyle] = useState<'onemap-night' | 'onemap-default' | 'onemap-grey' | 'onemap-original' | 'carto-dark' | 'osm'>('onemap-night');
   const [hasCustomToken, setHasCustomToken] = useState<boolean>(false);
   const [tokenType, setTokenType] = useState<string>('none');
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchingLocation, setIsSearchingLocation] = useState(false);
 
   // Check map token status from server
   useEffect(() => {
@@ -40,7 +41,6 @@ export const WeatherMap: React.FC<Props> = ({
         if (data?.configured) {
           setHasCustomToken(true);
           setTokenType(data.tokenType || 'onemap');
-          setMapStyle('onemap-night');
         }
       })
       .catch(() => {});
@@ -55,14 +55,17 @@ export const WeatherMap: React.FC<Props> = ({
       map.removeLayer(tileLayerRef.current);
     }
 
-    let url = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
-    let attribution = '&copy; <a href="https://carto.com/">CARTO</a> &copy; OpenStreetMap';
+    let url = 'https://www.onemap.gov.sg/maps/tiles/Night/{z}/{x}/{y}.png';
+    let attribution = 'Map data &copy; <a href="https://www.onemap.gov.sg" target="_blank" rel="noreferrer">Singapore Land Authority (OneMap SLA)</a>';
 
     if (mapStyle.startsWith('onemap-')) {
       const styleName = mapStyle.replace('onemap-', '');
       const capitalized = styleName.charAt(0).toUpperCase() + styleName.slice(1);
-      url = `/api/map/tiles/${capitalized}/{z}/{x}/{y}`;
-      attribution = '&copy; Singapore Land Authority (OneMap SLA) &copy; Singapore Gov';
+      url = `https://www.onemap.gov.sg/maps/tiles/${capitalized}/{z}/{x}/{y}.png`;
+      attribution = 'Map data &copy; <a href="https://www.onemap.gov.sg" target="_blank" rel="noreferrer">Singapore Land Authority (OneMap SLA)</a>';
+    } else if (mapStyle === 'carto-dark') {
+      url = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+      attribution = '&copy; <a href="https://carto.com/">CARTO</a> &copy; OpenStreetMap';
     } else if (mapStyle === 'osm') {
       url = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
       attribution = '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>';
@@ -87,7 +90,7 @@ export const WeatherMap: React.FC<Props> = ({
       center: [1.3521, 103.8198],
       zoom: 11,
       minZoom: 10,
-      maxZoom: 15,
+      maxZoom: 18,
       zoomControl: false,
       attributionControl: true,
       maxBounds: [
@@ -98,10 +101,9 @@ export const WeatherMap: React.FC<Props> = ({
 
     L.control.zoom({ position: 'bottomright' }).addTo(map);
 
-    // Initial tile layer (Carto Dark)
-    const initialTileLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://carto.com/">CARTO</a> &copy; OpenStreetMap',
-      subdomains: 'abcd',
+    // Initial tile layer: Official OneMap Singapore Night
+    const initialTileLayer = L.tileLayer('https://www.onemap.gov.sg/maps/tiles/Night/{z}/{x}/{y}.png', {
+      attribution: 'Map data &copy; <a href="https://www.onemap.gov.sg" target="_blank" rel="noreferrer">Singapore Land Authority (OneMap SLA)</a>',
       maxZoom: 19,
     }).addTo(map);
 
@@ -261,13 +263,13 @@ export const WeatherMap: React.FC<Props> = ({
     }
   }, [selectedStationId, rainfallStations]);
 
-  // Handle Search
-  const handleSearch = (e: React.FormEvent) => {
+  // Handle Search (Local stations + OneMap API location search)
+  const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim() || !mapInstanceRef.current) return;
 
     const query = searchQuery.toLowerCase();
-    // Search in rainfall stations first
+    // 1. Search in rainfall stations first
     const matchRain = rainfallStations.find((s) => s.name.toLowerCase().includes(query) || s.id.toLowerCase() === query);
     if (matchRain) {
       mapInstanceRef.current.flyTo([matchRain.location.latitude, matchRain.location.longitude], 13);
@@ -275,10 +277,42 @@ export const WeatherMap: React.FC<Props> = ({
       return;
     }
 
-    // Search in towns
+    // 2. Search in 2-hr town forecasts
     const matchTown = townForecasts.find((t) => t.area.toLowerCase().includes(query));
     if (matchTown) {
       mapInstanceRef.current.flyTo([matchTown.location.latitude, matchTown.location.longitude], 13);
+      return;
+    }
+
+    // 3. Query OneMap Search API (https://www.onemap.gov.sg) for addresses, landmarks, postal codes
+    try {
+      setIsSearchingLocation(true);
+      const res = await fetch(`/api/onemap/search?q=${encodeURIComponent(searchQuery)}`);
+      if (res.ok) {
+        const json = await res.json();
+        const topResult = json.results?.[0];
+        if (topResult && topResult.LATITUDE && topResult.LONGITUDE) {
+          const lat = parseFloat(topResult.LATITUDE);
+          const lng = parseFloat(topResult.LONGITUDE);
+          mapInstanceRef.current.flyTo([lat, lng], 14, { animate: true, duration: 1.2 });
+
+          // Pop up a transient marker at the searched location
+          const popup = L.popup()
+            .setLatLng([lat, lng])
+            .setContent(`
+              <div class="p-1 text-xs">
+                <strong class="text-white">${topResult.BUILDING || topResult.SEARCHVAL}</strong>
+                <p class="text-slate-400 text-[10px] mt-0.5">${topResult.ROAD_NAME || ''} ${topResult.POSTAL ? 'S(' + topResult.POSTAL + ')' : ''}</p>
+                <span class="text-[9px] text-teal-400 font-mono">Found via OneMap Singapore</span>
+              </div>
+            `)
+            .openOn(mapInstanceRef.current);
+        }
+      }
+    } catch (err) {
+      console.warn('OneMap search error:', err);
+    } finally {
+      setIsSearchingLocation(false);
     }
   };
 
@@ -352,28 +386,25 @@ export const WeatherMap: React.FC<Props> = ({
               className="bg-transparent text-slate-200 text-xs focus:outline-none cursor-pointer"
               title="Select Base Map Layer"
             >
+              <option value="onemap-night" className="bg-slate-900 text-white">OneMap Singapore (Night - SLA)</option>
+              <option value="onemap-default" className="bg-slate-900 text-white">OneMap Singapore (Default - SLA)</option>
+              <option value="onemap-grey" className="bg-slate-900 text-white">OneMap Singapore (Grey - SLA)</option>
+              <option value="onemap-original" className="bg-slate-900 text-white">OneMap Singapore (Original - SLA)</option>
               <option value="carto-dark" className="bg-slate-900 text-white">Carto Dark Matter</option>
-              <option value="onemap-night" className="bg-slate-900 text-white">OneMap Singapore (Night)</option>
-              <option value="onemap-default" className="bg-slate-900 text-white">OneMap Singapore (Default)</option>
-              <option value="onemap-grey" className="bg-slate-900 text-white">OneMap Singapore (Grey)</option>
               <option value="osm" className="bg-slate-900 text-white">OpenStreetMap Standard</option>
             </select>
-            {hasCustomToken ? (
-              <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" title="OneMap API Token Active" />
-            ) : (
-              <span className="w-2 h-2 rounded-full bg-sky-400 shrink-0" title="Token slot ready (falls back to Carto if empty)" />
-            )}
+            <span className="w-2 h-2 rounded-full bg-emerald-400 shrink-0" title="OneMap SLA Official Base Active" />
           </div>
 
           <form onSubmit={handleSearch} className="relative">
             <input
               type="text"
-              placeholder="Search station or town..."
+              placeholder={isSearchingLocation ? "Searching OneMap..." : "Search station, town, or address..."}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 text-white text-xs pl-8 pr-3 py-1.5 rounded-xl focus:outline-none focus:border-sky-500 w-44 sm:w-56"
+              className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 text-white text-xs pl-8 pr-3 py-1.5 rounded-xl focus:outline-none focus:border-sky-500 w-44 sm:w-60"
             />
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2" />
+            <Search className={`w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-2 ${isSearchingLocation ? 'animate-spin text-teal-400' : ''}`} />
           </form>
 
           <button
